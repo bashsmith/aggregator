@@ -18,8 +18,6 @@ class Aggregator(dict):
        arguments matching the fields. Each argument then becomes an empty key.'''
 
     def __init__(self, fieldnames, *args, **kwargs):
-        self.count = collections.Counter()
-        self.amount = collections.Counter()
         self._fields = tuple(fieldnames)
         self._keywrapper = collections.namedtuple('Key', fieldnames, **kwargs)
         for key in args:
@@ -31,48 +29,25 @@ class Aggregator(dict):
     def __len__(self):
         return len(self.count)
         
-    def __setitem__(self, key, amount):
-        key = tuple(key)
-        count, amount = getTotalObjectFromPair(amount)
-        if not self.count.get(key):
-            self.count[key], self.amount[key] = count, amount
-        else:
-            self.count = collections.Counter({key: count})
-            self.amount = collections.Counter({key: amount})
-        super(Aggregator, self).__setitem__(key, Total(self.count[key], self.amount[key]))
-        
-    def __getitem__(self, key):
-        key = tuple(key)
-        return Total(self.count[key], float(self.amount[key]))
+    def __setitem__(self, key, value):
+        key = tuple(self._keywrapper(*key)._asdict().values()) # fail if key can't match fields
+        super(Aggregator, self).__setitem__(key, sumTotals(value))
         
     def __radd__(self, aggregate):
-        self.splice(aggregate)
+        self.update(aggregate)
         
     def __add__(self, aggregate):
-        self.splice(aggregate)
+        self.update(aggregate)
         return self
-        
-    def _addTotals(t0, t1):
-        return Total(int(t0[0] + t1[0]), float(t0[1] + t1[1]))
 
-    def _addToTotal(amt):
-        return Total(1, t0[1] + amt)
-
-    def add(self, key, value):
-        self.count.update({key: 1})
-        self.amount.update({key: float(value)})
-        super(Aggregator, self).__setitem__(key, Total(self.count[key], self.amount[key]))
+    def update(self, obj):
+        for k, v in obj.iteritems():
+            key = tuple(self._keywrapper(*k)._asdict().values()) # fail if key can't match fields
+            if self.get(key):
+                self[key] = sumTotals(self[key], v)
+            else:
+                self[key] = sumTotals(v)
         
-    def update(self, *args, **kwargs):
-        '''Expects either a dict of keys and amounts as values, or set as keywords.'''
-        if args:
-            if len(args) > 1:
-                raise TypeError("update expected at most 1 arguments, got %d" % len(args))
-            for key, value in dict(args[0]).iteritems():
-                self.add(key, value)
-        for key, value in kwargs.iteritems():
-            self.add(key, value)
-            
     def copy(self):
         shallow_copy = Aggregator(self._fields)
         for key in self.iterkeys():
@@ -102,31 +77,17 @@ class Aggregator(dict):
             toss = key.pop(collapse_index)
             key = tuple(key)
             if collapsed_copy.get(key):
-                collapsed_copy.count.update({key: value.count})
-                collapsed_copy.amount.update({key: value.amount})
-                super(Aggregator, collapsed_copy).__setitem__(key, Total(collapsed_copy.count[key], collapsed_copy.amount[key]))
+                collapsed_copy[key] = sumTotals(collapsed_copy[key], value)
             else:
-                collapsed_copy[key] = value
+                collapsed_copy[key] = sumTotals(value)
         return collapsed_copy
 
-    def splice(self, aggregate):
-        '''Squeeze in additional aggregators, and add any keys to key tuple given if not present.'''
-        # first, consistency checks
-        if type(agg) is not type(self):
-            raise ValueError("Can only splice other %s objects." % type(self))
-        if agg._fields != self._fields:
-            raise ValueError("Can only splice with fieldlist: %s." % repr(list(self._fields)))
-        for key, aggTotal in agg.iteritems():
-            self.count.update({key: aggTotal.count})
-            self.amount.update({key: aggTotal.amount})
-            super(Aggregator, self).__setitem__(key, Total(self.count[key], self.amount[key]))
-                
     def value_sorted(self, by_count=False, reverse=False):
         return sorted(self.iteritems(), key=lambda (k,v): (v.count, v.amount) if by_count else (v.amount, v.count), reverse=reverse)
         
     def field_sorted(self, *field_keys, **kwargs):
         r = kwargs.get('reverse') or False
-        return sorted(self.iteritems(), key=lambda (k,v): [k._asdict[fk] for fk in field_keys], reverse=r)
+        return sorted(self.iteritems(), key=lambda (k,v): [self._keywrapper(*k)._asdict[fk] for fk in field_keys], reverse=r)
 
     def getcsv(self, *sort_keys, **kwargs):
         csv_fd = StringIO()
@@ -145,16 +106,17 @@ class Aggregator(dict):
 ##                Functions
 #################################################
 
-def getTotalObjectFromPair(tupOrVal):
-    try:
-        count, amount = 1, float(tupOrVal)
-        return Total(count, amount)
-    except:
-        if len(tupOrVal) > 2:
-            raise TypeError("Expected length 2, got %d" % len(tupOrVal))
-        count, amount = int(tupOrVal[0]), float(tupOrVal[1])
-        return Total(count, amount)
-
+def sumTotals(*t):
+    count, amount = 0, 0.0
+    for total in t:
+        if type(total) in (int, float):
+            count += 1
+            amount += float(total)
+        else:
+            count += int(total[0])
+            amount += float(total[1])
+    return Total(count, amount)
+            
         
 def getComplexCountFromSqlQuery(query, cursor, keylist):
     SqlMap = collections.Counter()
