@@ -9,7 +9,7 @@ from datetime import date
 #################################################
 ## Classes
 
-Count = collections.namedtuple('Total', ['count','amount'])
+Total = collections.namedtuple('Total', ['count','amount'])
 DictKeyTypes = (dict,collections.namedtuple,collections.OrderedDict)
 
 class Aggregator(dict):
@@ -23,7 +23,7 @@ class Aggregator(dict):
         self._fields = tuple(fieldnames)
         self._keywrapper = collections.namedtuple('Key', fieldnames, **kwargs)
         for key in args:
-            self[tuple(key)] = Count(0, 0.0)
+            self[tuple(key)] = Total(0, 0.0)
             
     def __repr__(self):
         return 'Aggregate:\n%s' % '\n'.join('  %s: %s' % (self._keywrapper(*k),v) for k,v in self.iteritems())
@@ -33,17 +33,17 @@ class Aggregator(dict):
         
     def __setitem__(self, key, amount):
         key = tuple(key)
-        count, amount = getCountObjectFromPair(amount)
+        count, amount = getTotalObjectFromPair(amount)
         if not self.count.get(key):
             self.count[key], self.amount[key] = count, amount
         else:
             self.count = collections.Counter({key: count})
             self.amount = collections.Counter({key: amount})
-        super(Aggregator, self).__setitem__(key, Count(self.count[key], self.amount[key]))
+        super(Aggregator, self).__setitem__(key, Total(self.count[key], self.amount[key]))
         
     def __getitem__(self, key):
         key = tuple(key)
-        return Count(self.count[key], float(self.amount[key]))
+        return Total(self.count[key], float(self.amount[key]))
         
     def __radd__(self, aggregate):
         self.splice(aggregate)
@@ -52,10 +52,16 @@ class Aggregator(dict):
         self.splice(aggregate)
         return self
         
+    def _addTotals(t0, t1):
+        return Total(int(t0[0] + t1[0]), float(t0[1] + t1[1]))
+
+    def _addToTotal(amt):
+        return Total(1, t0[1] + amt)
+
     def add(self, key, value):
         self.count.update({key: 1})
         self.amount.update({key: float(value)})
-        super(Aggregator, self).__setitem__(key, Count(self.count[key], self.amount[key]))
+        super(Aggregator, self).__setitem__(key, Total(self.count[key], self.amount[key]))
         
     def update(self, *args, **kwargs):
         '''Expects either a dict of keys and amounts as values, or set as keywords.'''
@@ -98,7 +104,7 @@ class Aggregator(dict):
             if collapsed_copy.get(key):
                 collapsed_copy.count.update({key: value.count})
                 collapsed_copy.amount.update({key: value.amount})
-                super(Aggregator, collapsed_copy).__setitem__(key, Count(collapsed_copy.count[key], collapsed_copy.amount[key]))
+                super(Aggregator, collapsed_copy).__setitem__(key, Total(collapsed_copy.count[key], collapsed_copy.amount[key]))
             else:
                 collapsed_copy[key] = value
         return collapsed_copy
@@ -110,10 +116,10 @@ class Aggregator(dict):
             raise ValueError("Can only splice other %s objects." % type(self))
         if agg._fields != self._fields:
             raise ValueError("Can only splice with fieldlist: %s." % repr(list(self._fields)))
-        for key, aggCount in agg.iteritems():
-            self.count.update({key: aggCount.count})
-            self.amount.update({key: aggCount.amount})
-            super(Aggregator, self).__setitem__(key, Count(self.count[key], self.amount[key]))
+        for key, aggTotal in agg.iteritems():
+            self.count.update({key: aggTotal.count})
+            self.amount.update({key: aggTotal.amount})
+            super(Aggregator, self).__setitem__(key, Total(self.count[key], self.amount[key]))
                 
     def value_sorted(self, by_count=False, reverse=False):
         return sorted(self.iteritems(), key=lambda (k,v): (v.count, v.amount) if by_count else (v.amount, v.count), reverse=reverse)
@@ -129,7 +135,7 @@ class Aggregator(dict):
         cw = csv.writer(csv_fd, **kwargs)
         cw.writerow(self._fields + ('count', 'amount'))
         for pair in self.field_sorted(*sort_keys, reverse=r):
-            # each row is a (Key, Count) pair.
+            # each row is a (Key, Total) pair.
             cw.writerow([i._asdict.values() for i in pair])
         csv_fd.seek(0)
         return csv_fd
@@ -139,15 +145,16 @@ class Aggregator(dict):
 ##                Functions
 #################################################
 
-def getCountObjectFromPair(tup):
+def getTotalObjectFromPair(tupOrVal):
     try:
-        count, amount = 1, float(tup)
-        return Count(count, amount)
+        count, amount = 1, float(tupOrVal)
+        return Total(count, amount)
     except:
-        if len(tup) > 2:
-            raise TypeError("Expected length 2, got %d" % len(tup))
-        count, amount = int(tup[0]), float(tup[1])
-        return Count(count, amount)
+        if len(tupOrVal) > 2:
+            raise TypeError("Expected length 2, got %d" % len(tupOrVal))
+        count, amount = int(tupOrVal[0]), float(tupOrVal[1])
+        return Total(count, amount)
+
         
 def getComplexCountFromSqlQuery(query, cursor, keylist):
     SqlMap = collections.Counter()
