@@ -4,7 +4,10 @@
 import itertools
 import collections
 import types
+import csv
+from cStringIO import StringIO
 from datetime import date
+from _abcoll import Mapping
 
 #################################################
 ## Classes
@@ -12,52 +15,73 @@ from datetime import date
 Total = collections.namedtuple('Total', ['count','amount'])
 DictKeyTypes = (dict,collections.namedtuple,collections.OrderedDict)
 
+def mutate(key, new_f, old_f):
+    newkey = list(None for i in new_f)
+    for k in key:
+        newkey[new_f.index(old_f[key.index(k)])] = k
+    return tuple(newkey)
+
 class Aggregator(dict):
     '''Takes an initial list of fields to use for tracking keys in the
-       Aggregator object. Aggregator may then be initialized with any number of
-       arguments matching the fields. Each argument then becomes an empty key.'''
+       Aggregator object. Aggregator may be initialized with any number of
+       sets of keys matching the fields. Each argument becomes an empty key.
+    '''
 
     def __init__(self, fieldnames, *args, **kwargs):
         self._fields = tuple(fieldnames)
         self._keywrapper = collections.namedtuple('Key', fieldnames, **kwargs)
         for key in args:
             self[tuple(key)] = Total(0, 0.0)
-            
+
     def __repr__(self):
         return 'Aggregate:\n%s' % '\n'.join('  %s: %s' % (self._keywrapper(*k),v) for k,v in self.iteritems())
-        
-    def __len__(self):
-        return len(self.count)
-        
+
     def __setitem__(self, key, value):
         key = tuple(self._keywrapper(*key)._asdict().values()) # fail if key can't match fields
         super(Aggregator, self).__setitem__(key, sumTotals(value))
-        
-    def __radd__(self, aggregate):
-        self.update(aggregate)
-        
-    def __add__(self, aggregate):
-        self.update(aggregate)
-        return self
 
-    def update(self, obj):
-        for k, v in obj.iteritems():
-            key = tuple(self._keywrapper(*k)._asdict().values()) # fail if key can't match fields
-            if self.get(key):
-                self[key] = sumTotals(self[key], v)
+    def __iadd__(self, other):
+        self.update(other)
+
+    def __add__(self, other):
+        if not isinstance(other, Aggregator):
+            return NotImplemented
+        # Although we can't guarantee field order, this shouldn't matter to us.
+        fields = tuple(set(other._fields).union(set(self._fields)))
+        result = Aggregator(fields)
+        for key, total in self.iteritems():
+            result.update({mutate(key, fields, self._fields): total})
+        for key, total in other.iteritems():
+            result.update({mutate(key, fields, other._fields): total})
+        return result
+
+    def update(self, *args, **kwargs):
+        if args and len(args) > 1:
+            raise TypeError('expected at most 1 arguments, got %d' % len(args))
+        iterable = args[0] if args else None
+        if iterable is not None:
+            if isinstance(iterable, Mapping):
+                for k, v in iterable.iteritems():
+                    key = tuple(self._keywrapper(*k)._asdict().values()) # fail if key can't match fields
+                    if self.get(key):
+                        self[key] = sumTotals(self[key], v)
+                    else:
+                        self[key] = sumTotals(v)
             else:
-                self[key] = sumTotals(v)
-        
+                raise TypeError('expected a mapping between keys and values, got %s' % type(iterable))
+        if kwargs:
+            self.update(kwargs)
+
     def copy(self):
         shallow_copy = Aggregator(self._fields)
         for key in self.iterkeys():
             shallow_copy[key] = self[key]
         return shallow_copy
-        
+
     def fieldkeys(self, field):
         index = self._fields.index(field)
         return set( fk[index] for fk in self.keys() )
-        
+
     def filter(self, *args):
         filtered_copy = Aggregator(self._fields)
         for k in args:
@@ -65,8 +89,8 @@ class Aggregator(dict):
             for key in found:
                 filtered_copy[key] = self[key]
         return filtered_copy
-        
-    def collapse(self, collapse_field): 
+
+    def collapse(self, collapse_field):
         '''Remove a sub-key element and merge values lacking the key, returning a new Aggregator.'''
         collapse_index = self._fields.index(collapse_field)
         fields = list(self._fields)
@@ -84,7 +108,7 @@ class Aggregator(dict):
 
     def value_sorted(self, by_count=False, reverse=False):
         return sorted(self.iteritems(), key=lambda (k,v): (v.count, v.amount) if by_count else (v.amount, v.count), reverse=reverse)
-        
+
     def field_sorted(self, *field_keys, **kwargs):
         r = kwargs.get('reverse') or False
         return sorted(self.iteritems(), key=lambda (k,v): [self._keywrapper(*k)._asdict[fk] for fk in field_keys], reverse=r)
@@ -101,7 +125,7 @@ class Aggregator(dict):
         csv_fd.seek(0)
         return csv_fd
 
-        
+
 #################################################
 ##                Functions
 #################################################
@@ -116,8 +140,8 @@ def sumTotals(*t):
             count += int(total[0])
             amount += float(total[1])
     return Total(count, amount)
-            
-        
+
+
 def getComplexCountFromSqlQuery(query, cursor, keylist):
     SqlMap = collections.Counter()
     cursor.execute(query)
@@ -132,7 +156,7 @@ def getComplexCountFromSqlQuery(query, cursor, keylist):
             count = int(value) if type(value) in (int,long) or (type(value) in (str,unicode) and value.isdigit()) else float(value)
         SqlMap[tuple(key)] = count
     return SqlMap
-    
+
 def getSetDictFromSqlQuery(query, cursor, keylist):
     SqlMap = dict()
     cursor.execute(query)
@@ -150,7 +174,7 @@ def getSetDictFromSqlQuery(query, cursor, keylist):
         else:
             SqlMap[tuple(key)].update(item)
     return SqlMap
-    
+
 def getAggregatesFromSqlQuery(query, cursor, keylist):
     SqlMap = Aggregator(keylist)
     cursor.execute(query)
@@ -167,14 +191,14 @@ def getAggregatesFromSqlQuery(query, cursor, keylist):
                 amount = float(value)
             else:
                 count = int(value)
-        SqlMap[tuple(key)] = Count(count, amount)
+        SqlMap[tuple(key)] = Total(count, amount)
     return SqlMap
-    
-    
+
+
 if __name__ == '__main__':
     import random
     agg = Aggregator(['field1', 'field2', 'field3'])
-    
+
     ccy = ('EUR', 'GBP', 'PLN', 'USD')
     land = ('de', 'es', 'fr', 'it', 'nl', 'pt')
     method = ('pos','atm')
