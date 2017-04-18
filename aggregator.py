@@ -13,13 +13,6 @@ from _abcoll import Mapping
 ## Classes
 
 Total = collections.namedtuple('Total', ['count','amount'])
-DictKeyTypes = (dict,collections.namedtuple,collections.OrderedDict)
-
-def mutate(key, new_f, old_f):
-    newkey = list(None for i in new_f)
-    for k in key:
-        newkey[new_f.index(old_f[key.index(k)])] = k
-    return tuple(newkey)
 
 class Aggregator(dict):
     '''Takes an initial list of fields to use for tracking keys in the
@@ -34,7 +27,7 @@ class Aggregator(dict):
             self[tuple(key)] = Total(0, 0.0)
 
     def __repr__(self):
-        return 'Aggregate:\n%s' % '\n'.join('  %s: %s' % (self._keywrapper(*k),v) for k,v in self.iteritems())
+        return '\n'.join('%s: %s' % (k,v) for k,v in self.iteritems())
 
     def __setitem__(self, key, value):
         key = tuple(self._keywrapper(*key)._asdict().values()) # fail if key can't match fields
@@ -42,17 +35,17 @@ class Aggregator(dict):
 
     def __iadd__(self, other):
         self.update(other)
+        return self
 
     def __add__(self, other):
         if not isinstance(other, Aggregator):
             return NotImplemented
-        # Although we can't guarantee field order, this shouldn't matter to us.
-        fields = tuple(set(other._fields).union(set(self._fields)))
-        result = Aggregator(fields)
-        for key, total in self.iteritems():
-            result.update({mutate(key, fields, self._fields): total})
-        for key, total in other.iteritems():
-            result.update({mutate(key, fields, other._fields): total})
+        if self._fields != other._fields:
+            raise ValueError("Mismatch between fields!\n  Original: %s\n  Applying: %s\n" % (self._fields, other._fields))
+        result = Aggregator(self._fields)
+        for key, total in itertools.chain(*(o.iteritems() for o in (self, other))):
+            key = tuple(self._keywrapper(*key)._asdict().values()) # fail if key can't match fields
+            result.update({key: total})
         return result
 
     def update(self, *args, **kwargs):
@@ -72,11 +65,33 @@ class Aggregator(dict):
         if kwargs:
             self.update(kwargs)
 
-    def copy(self):
-        shallow_copy = Aggregator(self._fields)
+    def merge(self, other):
+        '''Put together two arbitrary aggregators, supplying None for fieldkey
+           values where the fields don't match.'''
+        if not isinstance(other, Aggregator):
+            return NotImplemented
+        # Although we can't guarantee field order, this shouldn't matter to us.
+        fields = tuple(set(other._fields).union(set(self._fields)))
+        result = Aggregator(fields)
+        for key, total in itertools.chain(*(o.iteritems() for o in (self, other))):
+            result_key = list(None for i in fields)
+            for k in key:
+                result_key[fields.index(key._fields[key.index(k)])] = k
+            key = tuple(result_key)
+            result.update({key: total})
+        return result
+
+    def iteritems(self):
+        for k, v in super(Aggregator, self).iteritems():
+            yield self._keywrapper(*k), v
+
+    def items(self):
+        return [(self._keywrapper(*k), v) for k, v in super(Aggregator, self).items()]
+
+    def iterfieldkeys(self, field):
+        index = self._fields.index(field)
         for key in self.iterkeys():
-            shallow_copy[key] = self[key]
-        return shallow_copy
+            yield key[index]
 
     def fieldkeys(self, field):
         index = self._fields.index(field)
@@ -133,7 +148,7 @@ class Aggregator(dict):
 def sumTotals(*t):
     count, amount = 0, 0.0
     for total in t:
-        if type(total) in (int, float):
+        if isinstance(total, (int, float)):
             count += 1
             amount += float(total)
         else:
@@ -209,10 +224,34 @@ if __name__ == '__main__':
         f3 = method[random.randrange(0,len(method))]
         agg.update({(f1,f2,f3): n*float('%01.2f' % random.random())})
 
-    print(agg)
-    print(agg.collapse('field2'))
-    print(agg.filter('USD'))
+    agg1 = agg.filter('EUR').collapse('field2')
+    agg2 = agg.filter('USD').collapse('field1')
 
-    agg2 = agg.filter('USD')
-    print(agg + agg2)
+    print("Agg1")
+    print(agg1)
+    print("\n")
+    print("Agg2")
+    print(agg2)
+    print("\n")
+
+    print("Merge Test:")
+    print(agg1.merge(agg2))
+    print("\n")
+
+    print("Add Test (agg1 + agg1):")
+    print(agg1 + agg1)
+    print("\n")
+
+    for k, v in agg1.iteritems():
+        print("%s: %s" % (k, v))
+    print("\n")
+
+    print(agg2.items())
+    print("\n")
+
+    print("__iadd__ Test (agg1 + agg2):")
+    print("note: update does not respect fieldkeys, only the number of fieldkeys")
+    agg1 += agg2
+    print(agg1)
+    print("\n")
 
