@@ -50,3 +50,21 @@ definitions:
       }
 
 ## Use
+
+An example:
+
+>>> agg = aggregator.Aggregator(['field1', 'field2', 'field3'])
+>>> agg.update({ ('foo', 'bar', 'koi'): 34.67 })
+>>> agg.update({ ('foo', 'bee', 'koi'): 817.02 })
+>>>     # short version overloads radd
+>>> agg += { ('foo', 'bar', 'koi'):  12.11 }
+>>> agg
+Key(field1='foo', field2='bee', field3='koi'): Total(count=1, amount=817.02)
+>>> agg.filter('bar')
+Key(field1='foo', field2='bar', field3='koi'): Total(count=2, amount=46.78)Key(field1='foo', field2='bar', field3='koi'): Total(count=2, amount=46.78)
+>>> agg.collapse('field2')
+Key(field1='foo', field3='koi'): Total(count=3, amount=863.8)
+
+
+
+
