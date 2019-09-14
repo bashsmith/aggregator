@@ -15,9 +15,11 @@ from _abcoll import Mapping
 Total = collections.namedtuple('Total', ['count','amount'])
 
 class Aggregator(dict):
-    '''Takes an initial list of fields to use for tracking keys in the
-       Aggregator object. Aggregator may be initialized with any number of
-       sets of keys matching the fields. Each argument becomes an empty key.
+    # This class simplifies taking an aggregate count and volume from a list of financial transactions, supporting access to multiple views on the completed sums by sets of keys.
+	
+    '''Create a miniature database-like object to quickly see totals for a given set of keys.
+    
+    :param: fieldnames: initial list of fields to use for labelling keys by their type.
     '''
 
     def __init__(self, fieldnames, *args, **kwargs):
